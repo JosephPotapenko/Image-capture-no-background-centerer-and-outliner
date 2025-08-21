@@ -5,18 +5,25 @@
   <title>Image Asset Extractor with Outline & Selection</title>
   <style>
     body { font-family: sans-serif; padding: 2em; background: #f9f9f9; }
-    #images { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 1em; }
+    #images { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 1em; position: relative; }
     canvas { border: 1px solid #ccc; background: white; cursor: pointer; transition: box-shadow 0.2s; }
     canvas.selected { box-shadow: 0 0 0 4px lightblue; }
     label { font-weight: bold; margin-right: 1em; }
     .bar-container { width: 400px; height: 20px; background: #ddd; margin: 10px 0; }
     .bar { height: 100%; background: #76c7c0; width: 0%; transition: width 0.3s ease; }
+    .selection-box { 
+      position: absolute; 
+      border: 2px dashed #007acc; 
+      background: rgba(0, 122, 204, 0.1); 
+      pointer-events: none; 
+      z-index: 1000; 
+    }
   </style>
 </head>
 <body>
   <h2>Upload, Extract, Outline & Download Image Assets</h2>
 
-  <input type="file" id="upload" accept="image/png">
+  <input type="file" id="upload" accept="image/*" multiple>
   <div class="bar-container"><div id="uploadBar" class="bar"></div></div>
 
   <br>
@@ -29,8 +36,14 @@
     <span id="thicknessValue">3</span>px
   </label>
 
+    <label style="margin-left: 2em;">Output Size:
+      <input type="range" id="outputSize" min="100" max="1000" value="400">
+      <span id="outputSizeValue">400</span>px
+    </label>
+
   <br><br>
   <button id="selectAll">Select All</button>
+  <button id="deselectAll">Deselect All</button>
   <button id="downloadSelected">Download Selected Images</button>
 
   <div id="images"></div>
@@ -41,12 +54,98 @@
     const outlineColor = document.getElementById('outlineColor');
     const thicknessSlider = document.getElementById('thickness');
     const thicknessValue = document.getElementById('thicknessValue');
+      const outputSizeSlider = document.getElementById('outputSize');
+      const outputSizeValue = document.getElementById('outputSizeValue');
     const imagesDiv = document.getElementById('images');
     const downloadSelected = document.getElementById('downloadSelected');
     const selectAllBtn = document.getElementById('selectAll');
+    const deselectAllBtn = document.getElementById('deselectAll');
+
+    // Drag selection variables
+    let isDragging = false;
+    let startX = 0;
+    let startY = 0;
+    let selectionBox = null;
 
     thicknessSlider.addEventListener('input', () => {
       thicknessValue.textContent = thicknessSlider.value;
+    });
+
+      outputSizeSlider.addEventListener('input', () => {
+        outputSizeValue.textContent = outputSizeSlider.value;
+      });
+
+    // Drag selection functionality
+    imagesDiv.addEventListener('mousedown', (e) => {
+      if (e.target === imagesDiv) {
+        isDragging = true;
+        const rect = imagesDiv.getBoundingClientRect();
+        startX = e.clientX - rect.left;
+        startY = e.clientY - rect.top;
+        
+        selectionBox = document.createElement('div');
+        selectionBox.className = 'selection-box';
+        selectionBox.style.left = startX + 'px';
+        selectionBox.style.top = startY + 'px';
+        selectionBox.style.width = '0px';
+        selectionBox.style.height = '0px';
+        imagesDiv.appendChild(selectionBox);
+        
+        e.preventDefault();
+      }
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (isDragging && selectionBox) {
+        const rect = imagesDiv.getBoundingClientRect();
+        const currentX = e.clientX - rect.left;
+        const currentY = e.clientY - rect.top;
+        
+        const left = Math.min(startX, currentX);
+        const top = Math.min(startY, currentY);
+        const width = Math.abs(currentX - startX);
+        const height = Math.abs(currentY - startY);
+        
+        selectionBox.style.left = left + 'px';
+        selectionBox.style.top = top + 'px';
+        selectionBox.style.width = width + 'px';
+        selectionBox.style.height = height + 'px';
+      }
+    });
+
+    document.addEventListener('mouseup', (e) => {
+      if (isDragging && selectionBox) {
+        const rect = imagesDiv.getBoundingClientRect();
+        const currentX = e.clientX - rect.left;
+        const currentY = e.clientY - rect.top;
+        
+        const left = Math.min(startX, currentX);
+        const top = Math.min(startY, currentY);
+        const width = Math.abs(currentX - startX);
+        const height = Math.abs(currentY - startY);
+        
+        // Find canvases that intersect with selection box
+        const canvases = imagesDiv.querySelectorAll('canvas');
+        canvases.forEach(canvas => {
+          const canvasRect = canvas.getBoundingClientRect();
+          const canvasLeft = canvasRect.left - rect.left;
+          const canvasTop = canvasRect.top - rect.top;
+          const canvasRight = canvasLeft + canvasRect.width;
+          const canvasBottom = canvasTop + canvasRect.height;
+          
+          // Check if canvas intersects with selection box
+          if (left < canvasRight && left + width > canvasLeft && 
+              top < canvasBottom && top + height > canvasTop) {
+            // Toggle selection state - if selected, deselect; if deselected, select
+            canvas.classList.toggle('selected');
+          }
+        });
+        
+        // Remove selection box
+        selectionBox.remove();
+        selectionBox = null;
+        isDragging = false;
+      }
     });
 
     function setBar(percent) {
@@ -112,41 +211,42 @@
         }
       }
 
+      const outputSize = parseInt(outputSizeSlider.value);
       return components.map((b, i) => {
         const cropW = b.max.x - b.min.x;
         const cropH = b.max.y - b.min.y;
         const paddingRatio = 0.1;
-        const usableW = 400 * (1 - 2 * paddingRatio);
-        const usableH = 400 * (1 - 2 * paddingRatio);
+        const usableW = outputSize * (1 - 2 * paddingRatio);
+        const usableH = outputSize * (1 - 2 * paddingRatio);
         const scale = Math.min(usableW / cropW, usableH / cropH);
         const drawW = cropW * scale;
         const drawH = cropH * scale;
-        const offsetX = (400 - drawW) / 2;
-        const offsetY = (400 - drawH) / 2;
+        const offsetX = (outputSize - drawW) / 2;
+        const offsetY = (outputSize - drawH) / 2;
 
         const canvas = document.createElement('canvas');
-        canvas.width = 400;
-        canvas.height = 400;
+        canvas.width = outputSize;
+        canvas.height = outputSize;
         const ctx = canvas.getContext('2d');
 
-        ctx.clearRect(0, 0, 400, 400);
+        ctx.clearRect(0, 0, outputSize, outputSize);
         ctx.drawImage(temp, b.min.x, b.min.y, cropW, cropH, offsetX, offsetY, drawW, drawH);
 
-        const imageData = ctx.getImageData(0, 0, 400, 400);
-        const outlined = ctx.getImageData(0, 0, 400, 400);
+        const imageData = ctx.getImageData(0, 0, outputSize, outputSize);
+        const outlined = ctx.getImageData(0, 0, outputSize, outputSize);
         const thickness = parseInt(thicknessSlider.value);
         const color = hexToRgb(outlineColor.value);
 
-        for (let y = 0; y < 400; y++) {
-          for (let x = 0; x < 400; x++) {
-            const idx = (y * 400 + x) * 4;
+        for (let y = 0; y < outputSize; y++) {
+          for (let x = 0; x < outputSize; x++) {
+            const idx = (y * outputSize + x) * 4;
             if (imageData.data[idx + 3] === 0) continue;
             let edge = false;
             for (let dy = -thickness; dy <= thickness; dy++) {
               for (let dx = -thickness; dx <= thickness; dx++) {
                 const nx = x + dx, ny = y + dy;
-                if (nx < 0 || ny < 0 || nx >= 400 || ny >= 400) continue;
-                const nIdx = (ny * 400 + nx) * 4;
+                if (nx < 0 || ny < 0 || nx >= outputSize || ny >= outputSize) continue;
+                const nIdx = (ny * outputSize + nx) * 4;
                 if (imageData.data[nIdx + 3] === 0) edge = true;
               }
             }
@@ -165,39 +265,64 @@
     }
 
     upload.addEventListener('change', () => {
-      const file = upload.files[0];
-      if (!file) return;
+      const files = Array.from(upload.files);
+      if (files.length === 0) return;
+      
       setBar(10);
-      const reader = new FileReader();
-      reader.onload = () => {
-        const img = new Image();
-        img.onload = () => {
-          setBar(30);
-          const assets = extractAssets(img);
-          setBar(70);
-          imagesDiv.innerHTML = '';
-          assets.forEach((canvas, i) => {
-            canvas.classList.add('selectable');
-            canvas.addEventListener('click', () => canvas.classList.toggle('selected'));
-            imagesDiv.appendChild(canvas);
-          });
-          setBar(100);
+      imagesDiv.innerHTML = '';
+      let processedFiles = 0;
+      const totalFiles = files.length;
+      
+      files.forEach((file, fileIndex) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const img = new Image();
+          img.onload = () => {
+            const assets = extractAssets(img);
+            
+            assets.forEach((canvas, assetIndex) => {
+              canvas.classList.add('selectable');
+              canvas.addEventListener('click', (e) => {
+                // Only toggle if this wasn't part of a drag operation
+                if (!isDragging) {
+                  canvas.classList.toggle('selected');
+                }
+              });
+              canvas.setAttribute('data-file-index', fileIndex);
+              canvas.setAttribute('data-asset-index', assetIndex);
+              imagesDiv.appendChild(canvas);
+            });
+            
+            processedFiles++;
+            const progress = 10 + (processedFiles / totalFiles) * 90;
+            setBar(progress);
+          };
+          img.src = reader.result;
         };
-        img.src = reader.result;
-      };
-      reader.readAsDataURL(file);
+        reader.readAsDataURL(file);
+      });
     });
 
     selectAllBtn.addEventListener('click', () => {
       document.querySelectorAll('#images canvas').forEach(canvas => canvas.classList.add('selected'));
     });
 
+    deselectAllBtn.addEventListener('click', () => {
+      document.querySelectorAll('#images canvas').forEach(canvas => canvas.classList.remove('selected'));
+    });
+
     downloadSelected.addEventListener('click', () => {
-      document.querySelectorAll('#images canvas.selected').forEach((canvas, i) => {
-        const a = document.createElement('a');
-        a.href = canvas.toDataURL();
-        a.download = `asset_${i+1}.png`;
-        a.click();
+      const selectedCanvases = document.querySelectorAll('#images canvas.selected');
+      
+      selectedCanvases.forEach((canvas, i) => {
+        setTimeout(() => {
+          const fileIndex = canvas.getAttribute('data-file-index') || '0';
+          const assetIndex = canvas.getAttribute('data-asset-index') || '0';
+          const a = document.createElement('a');
+          a.href = canvas.toDataURL();
+          a.download = `image_${parseInt(fileIndex) + 1}_asset_${parseInt(assetIndex) + 1}.png`;
+          a.click();
+        }, i * 100); // 100ms delay between each download
       });
     });
   </script>
