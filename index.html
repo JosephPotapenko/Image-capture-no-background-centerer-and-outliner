@@ -42,6 +42,13 @@
     </label>
 
   <br><br>
+  <label>Edge Smoothing:
+    <input type="range" id="smoothing" min="0" max="10" value="0">
+    <span id="smoothingValue">0</span>
+    <button id="applySmoothing">Apply Smoothing</button>
+  </label>
+
+  <br><br>
   <button id="selectAll">Select All</button>
   <button id="deselectAll">Deselect All</button>
   <button id="downloadSelected">Download Selected Images</button>
@@ -56,6 +63,9 @@
     const thicknessValue = document.getElementById('thicknessValue');
       const outputSizeSlider = document.getElementById('outputSize');
       const outputSizeValue = document.getElementById('outputSizeValue');
+    const smoothingSlider = document.getElementById('smoothing');
+    const smoothingValue = document.getElementById('smoothingValue');
+    const applySmoothingBtn = document.getElementById('applySmoothing');
     const imagesDiv = document.getElementById('images');
     const downloadSelected = document.getElementById('downloadSelected');
     const selectAllBtn = document.getElementById('selectAll');
@@ -74,6 +84,14 @@
       outputSizeSlider.addEventListener('input', () => {
         outputSizeValue.textContent = outputSizeSlider.value;
       });
+
+    smoothingSlider.addEventListener('input', () => {
+      smoothingValue.textContent = smoothingSlider.value;
+    });
+
+    applySmoothingBtn.addEventListener('click', () => {
+      applyEdgeSmoothing();
+    });
 
     // Drag selection functionality
     imagesDiv.addEventListener('mousedown', (e) => {
@@ -150,6 +168,115 @@
 
     function setBar(percent) {
       uploadBar.style.width = percent + '%';
+    }
+
+    function cleanupSmallArtifacts(imageData, width, height) {
+      const visited = new Uint8Array(width * height);
+      const minSize = 10; // Minimum size threshold (10x10 pixels = 100 pixels total)
+      
+      function floodFillAndMeasure(startX, startY) {
+        const queue = [[startX, startY]];
+        const pixels = [];
+        let minX = startX, maxX = startX, minY = startY, maxY = startY;
+
+        while (queue.length > 0) {
+          const [x, y] = queue.pop();
+          const idx = y * width + x;
+          
+          if (x < 0 || y < 0 || x >= width || y >= height) continue;
+          if (visited[idx]) continue;
+          
+          const pixelIdx = idx * 4;
+          if (imageData.data[pixelIdx + 3] === 0) continue; // Skip transparent pixels
+          
+          visited[idx] = 1;
+          pixels.push([x, y]);
+          
+          minX = Math.min(minX, x);
+          maxX = Math.max(maxX, x);
+          minY = Math.min(minY, y);
+          maxY = Math.max(maxY, y);
+          
+          queue.push([x+1, y], [x-1, y], [x, y+1], [x, y-1]);
+        }
+        
+        const componentWidth = maxX - minX + 1;
+        const componentHeight = maxY - minY + 1;
+        
+        // If component is smaller than minSize x minSize, mark for deletion
+        if (componentWidth < minSize && componentHeight < minSize) {
+          pixels.forEach(([px, py]) => {
+            const pixelIdx = (py * width + px) * 4;
+            imageData.data[pixelIdx + 3] = 0; // Make transparent
+          });
+        }
+        
+        return pixels.length > 0;
+      }
+      
+      // Scan all pixels to find and clean small artifacts
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const idx = y * width + x;
+          const pixelIdx = idx * 4;
+          
+          if (!visited[idx] && imageData.data[pixelIdx + 3] > 0) {
+            floodFillAndMeasure(x, y);
+          }
+        }
+      }
+    }
+
+    function applyEdgeSmoothing() {
+      const smoothingLevel = parseInt(smoothingSlider.value);
+      if (smoothingLevel === 0) return;
+      
+      document.querySelectorAll('#images canvas.selected').forEach(canvas => {
+        const ctx = canvas.getContext('2d');
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const smoothed = new ImageData(canvas.width, canvas.height);
+        
+        // Copy original data
+        for (let i = 0; i < imageData.data.length; i++) {
+          smoothed.data[i] = imageData.data[i];
+        }
+        
+        // Apply smoothing by averaging neighboring pixels
+        const radius = smoothingLevel;
+        for (let y = radius; y < canvas.height - radius; y++) {
+          for (let x = radius; x < canvas.width - radius; x++) {
+            const idx = (y * canvas.width + x) * 4;
+            
+            if (imageData.data[idx + 3] > 0) { // Only process non-transparent pixels
+              let totalR = 0, totalG = 0, totalB = 0, totalA = 0;
+              let count = 0;
+              
+              // Sample neighboring pixels
+              for (let dy = -radius; dy <= radius; dy++) {
+                for (let dx = -radius; dx <= radius; dx++) {
+                  const nIdx = ((y + dy) * canvas.width + (x + dx)) * 4;
+                  if (imageData.data[nIdx + 3] > 0) {
+                    totalR += imageData.data[nIdx];
+                    totalG += imageData.data[nIdx + 1];
+                    totalB += imageData.data[nIdx + 2];
+                    totalA += imageData.data[nIdx + 3];
+                    count++;
+                  }
+                }
+              }
+              
+              if (count > 0) {
+                smoothed.data[idx] = totalR / count;
+                smoothed.data[idx + 1] = totalG / count;
+                smoothed.data[idx + 2] = totalB / count;
+                smoothed.data[idx + 3] = totalA / count;
+              }
+            }
+          }
+        }
+        
+        ctx.putImageData(smoothed, 0, 0);
+      });
     }
 
     function hexToRgb(hex) {
@@ -233,6 +360,15 @@
         ctx.drawImage(temp, b.min.x, b.min.y, cropW, cropH, offsetX, offsetY, drawW, drawH);
 
         const imageData = ctx.getImageData(0, 0, outputSize, outputSize);
+        
+        // Clean up small artifacts (smaller than 10x10 pixels)
+        cleanupSmallArtifacts(imageData, outputSize, outputSize);
+        
+        // Put the cleaned image data back on the canvas
+        ctx.putImageData(imageData, 0, 0);
+        
+        // Get fresh image data for outline processing
+        const cleanedImageData = ctx.getImageData(0, 0, outputSize, outputSize);
         const outlined = ctx.getImageData(0, 0, outputSize, outputSize);
         const thickness = parseInt(thicknessSlider.value);
         const color = hexToRgb(outlineColor.value);
@@ -240,14 +376,14 @@
         for (let y = 0; y < outputSize; y++) {
           for (let x = 0; x < outputSize; x++) {
             const idx = (y * outputSize + x) * 4;
-            if (imageData.data[idx + 3] === 0) continue;
+            if (cleanedImageData.data[idx + 3] === 0) continue;
             let edge = false;
             for (let dy = -thickness; dy <= thickness; dy++) {
               for (let dx = -thickness; dx <= thickness; dx++) {
                 const nx = x + dx, ny = y + dy;
                 if (nx < 0 || ny < 0 || nx >= outputSize || ny >= outputSize) continue;
                 const nIdx = (ny * outputSize + nx) * 4;
-                if (imageData.data[nIdx + 3] === 0) edge = true;
+                if (cleanedImageData.data[nIdx + 3] === 0) edge = true;
               }
             }
             if (edge) {
